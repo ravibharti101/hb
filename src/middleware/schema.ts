@@ -147,3 +147,15 @@ export type $ReqCtx<
   E extends Env = BlankEnv,
   P extends string = "/",
 > = Context<E, P, BuildRouterSchema<S>>;
+
+
+export type BuildReqSchema<T extends RouterSchemaDef> = Merge<
+  [
+    $SchemaType<"param", T["param"]>,
+    $QueryType<T["query"]>,
+    $JsonType<T["body"]>,
+    $HeaderType<T["header"]>,
+    $FormType<T["form"]>,
+    $CookieType<T["cookie"]>,
+  ]
+>;
