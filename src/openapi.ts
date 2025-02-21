@@ -1,11 +1,5 @@
 import { TSchema } from "@sinclair/typebox";
 
-type RouterDocs = {
-  summary: string;
-  description?: string;
-  tags?: string[];
-};
-
 export type RequestSchema = {
   /**
    * The schema for the request parameters
@@ -38,7 +32,6 @@ export const Utils = {
   $resolveObject(pName: string, query: TSchema) {
     const parameters: Parameter[] = [];
     for (const [name, schema] of Object.entries(query.properties)) {
-      console.log(name, schema);
       parameters.push({
         name: name,
         in: pName,
@@ -48,7 +41,6 @@ export const Utils = {
         schema: schema,
       });
     }
-    console.log("Length:", parameters.length);
     return parameters;
   },
   resolveParameter(pName: string, query: TSchema) {
@@ -80,14 +72,14 @@ export const Utils = {
   },
 };
 
-type BuilderOptions = {
+type APIDocs = {
   description?: string;
   summary?: string;
   tags?: string[];
   operationId?: string;
 };
 
-export function pathDocBuilder(options: BuilderOptions) {
+export function pathDocBuilder(options: APIDocs) {
   const parameters: Parameter[] = [];
   let requestBody: RequestBody = {};
   let responseSchema: ResponseType;
@@ -100,7 +92,6 @@ export function pathDocBuilder(options: BuilderOptions) {
         parameters.push(...Utils.resolveParameter("param", schema.param));
       }
       if (schema.query) {
-        console.log("Query:", schema.query);
         parameters.push(...Utils.resolveParameter("query", schema.query));
       }
       if (schema.header) {
@@ -122,30 +113,94 @@ export function pathDocBuilder(options: BuilderOptions) {
   };
 }
 
-export function routeDocBuilder(method: string, path: string) {
-  let requestSchema: any = {};
-  let apiDocs: BuilderOptions = {};
-  let responseSchema: any = {};
-  return {
-    apiDocs(doc: BuilderOptions) {
-      apiDocs = doc;
-      return this;
-    },
-    schema(request: RequestSchema, response: any) {
-      requestSchema = request;
-      responseSchema = response;
-      return this;
-    },
-    $build() {
-      const builder = pathDocBuilder(apiDocs)
-        .request(requestSchema)
-        .response(responseSchema);
-      return {
-        path: Utils.convertUrlParamIntoOpenAPIParam(path),
-        [method]: builder.$build(),
-      };
-    },
-  };
+type StoreRouteOptions = {
+  apiDocs: APIDocs;
+  requestSchema: RequestSchema;
+  responseSchema: any
+}
+
+export class OpenAPIBuilder {
+  private _map: Map<string, StoreRouteOptions>;
+  private _separator = ':#';
+  constructor() {
+    this._map = new Map()
+  }
+  private $$routeDocBuilder(method: string, path: string) {
+    let requestSchema: any = {};
+    let apiDocs: APIDocs = {};
+    let responseSchema: any = {};
+    return {
+      apiDocs(doc: APIDocs) {
+        apiDocs = doc;
+        return this;
+      },
+      schema(request: RequestSchema, response: any) {
+        requestSchema = request;
+        responseSchema = response;
+        return this;
+      },
+      $build() {
+        const builder = pathDocBuilder(apiDocs)
+          .request(requestSchema)
+          .response(responseSchema);
+        return {
+          method,
+          path: Utils.convertUrlParamIntoOpenAPIParam(path),
+          schema: builder.$build(),
+        };
+      },
+    };
+  }
+  private $$buildKey(method: string, path: string) {
+    return `${method}${this._separator}${path}`;
+  }
+  private $$decodeKey(key: string) {
+    return key.split(this._separator);
+  }
+  setRoute(method: string, path: string, docs: StoreRouteOptions) {
+    this._map.set(this.$$buildKey(method, path), docs);
+  }
+  $entries() {
+    return this._map.entries();
+  }
+  $toArray() {
+    return this._map.entries().toArray();
+  }
+  fromBuilder(prefix: string, obj: OpenAPIBuilder) {
+    for (const [path, doc] of obj.$entries()) {
+      const [method, routePath] = path.split(this._separator);
+      this._map.set(this.$$buildKey(method, prefix + routePath), doc);
+    }
+  }
+
+  private $$generateDocs(docMap: Map<string, Map<string, Record<string, unknown>>>) {
+    let map = new Map<string, Record<string, unknown>>();
+    for (const [path, methodInfo] of docMap.entries()) {
+      const routeData: Record<string, unknown> = {};
+      for (const [method, routeDoc] of methodInfo.entries()) {
+        routeData[method] = routeDoc;
+      }
+      map.set(path, routeData);
+    }
+    return Object.fromEntries(map.entries())
+  }
+  $build() {
+    const map = new Map<string, Map<string, Record<string, unknown>>>();
+    for (const [routeKey, doc] of this.$toArray()) {
+      const [method, path] = this.$$decodeKey(routeKey);
+      const builder = this.$$routeDocBuilder(method, path).apiDocs(doc.apiDocs)
+        .schema(doc.requestSchema, doc.responseSchema);
+      const result = builder.$build();
+      if (map.has(result.path)) {
+        map.get(result.path)?.set(method, result.schema);
+      } else {
+        const m = new Map<string, Record<string, unknown>>();
+        m.set(method, result.schema);
+        map.set(result.path, m)
+      }
+    }
+    return this.$$generateDocs(map);
+  }
 }
 
 type RequestBody = {
